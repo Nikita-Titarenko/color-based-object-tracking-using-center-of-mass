@@ -34,6 +34,22 @@ class App:
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
         return frame
 
+    def _fit_frame_to_video_area(self, image):
+        target_width = self.video_area.winfo_width() or 600
+        target_height = self.video_area.winfo_height() or 400
+
+        src_width, src_height = image.size
+        scale = min(target_width / src_width, target_height / src_height)
+        resized_width = max(1, int(src_width * scale))
+        resized_height = max(1, int(src_height * scale))
+
+        resized_image = image.resize((resized_width, resized_height), Image.Resampling.LANCZOS)
+        canvas = Image.new("RGB", (target_width, target_height), (0, 0, 0))
+        offset_x = (target_width - resized_width) // 2
+        offset_y = (target_height - resized_height) // 2
+        canvas.paste(resized_image, (offset_x, offset_y))
+        return canvas
+
     def _build_ui(self):
         self.root.grid_rowconfigure(0, weight=1)
         self.root.grid_columnconfigure(0, weight=3)
@@ -265,7 +281,7 @@ class App:
 
         formatted = cv2.cvtColor(self.frame, cv2.COLOR_BGR2RGB)
         image = Image.fromarray(formatted)
-        image = image.resize((self.video_area.winfo_width() or 600, self.video_area.winfo_height() or 400), Image.Resampling.LANCZOS)
+        image = self._fit_frame_to_video_area(image)
         photo = ImageTk.PhotoImage(image)
         self.video_area.config(image=photo, compound="center")
         self.video_area.image = photo
