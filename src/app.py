@@ -34,19 +34,24 @@ class App:
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
         return frame
 
-    def _fit_frame_to_video_area(self, image):
+    def _get_video_display_geometry(self, src_width, src_height):
         target_width = self.video_area.winfo_width() or 600
         target_height = self.video_area.winfo_height() or 400
 
-        src_width, src_height = image.size
         scale = min(target_width / src_width, target_height / src_height)
-        resized_width = max(1, int(src_width * scale))
-        resized_height = max(1, int(src_height * scale))
+        display_width = max(1, int(src_width * scale))
+        display_height = max(1, int(src_height * scale))
+        offset_x = (target_width - display_width) // 2
+        offset_y = (target_height - display_height) // 2
+
+        return target_width, target_height, display_width, display_height, offset_x, offset_y
+
+    def _fit_frame_to_video_area(self, image):
+        src_width, src_height = image.size
+        target_width, target_height, resized_width, resized_height, offset_x, offset_y = self._get_video_display_geometry(src_width, src_height)
 
         resized_image = image.resize((resized_width, resized_height), Image.Resampling.LANCZOS)
         canvas = Image.new("RGB", (target_width, target_height), (0, 0, 0))
-        offset_x = (target_width - resized_width) // 2
-        offset_y = (target_height - resized_height) // 2
         canvas.paste(resized_image, (offset_x, offset_y))
         return canvas
 
@@ -133,7 +138,20 @@ class App:
         text_style = {"bg": "#1a1f2b", "fg": "white", "font": ("Consolas", 15), "anchor": "w"}
 
         tk.Label(right_panel, textvariable=self.formula_var, **text_style).pack(anchor="w", padx=24, pady=(2, 0))
-        tk.Label(right_panel, textvariable=self.target_var, **text_style).pack(anchor="w", padx=24, pady=(2, 0))
+        target_row = tk.Frame(right_panel, bg="#1a1f2b")
+        target_row.pack(anchor="w", fill="x", padx=24, pady=(2, 0))
+
+        tk.Label(target_row, textvariable=self.target_var, **text_style).pack(side="left")
+        self.target_color_preview = tk.Label(
+            target_row,
+            width=2,
+            height=1,
+            bg="#2b3140",
+            relief="solid",
+            borderwidth=1,
+        )
+        self.target_color_preview.pack(side="left", padx=(10, 0), ipady=6)
+
         tk.Checkbutton(
             right_panel,
             text="Use findContours filter",
@@ -187,8 +205,17 @@ class App:
             return
 
         frame_h, frame_w = self.frame.shape[:2]
-        x = max(0, min(int(event.x / self.video_area.winfo_width() * frame_w), frame_w - 1))
-        y = max(0, min(int(event.y / self.video_area.winfo_height() * frame_h), frame_h - 1))
+        _, _, display_width, display_height, offset_x, offset_y = self._get_video_display_geometry(frame_w, frame_h)
+
+        if event.x < offset_x or event.x >= offset_x + display_width:
+            return
+        if event.y < offset_y or event.y >= offset_y + display_height:
+            return
+
+        relative_x = (event.x - offset_x) / display_width
+        relative_y = (event.y - offset_y) / display_height
+        x = max(0, min(int(relative_x * frame_w), frame_w - 1))
+        y = max(0, min(int(relative_y * frame_h), frame_h - 1))
         self.tracker.set_reference_color(self.frame[y, x].astype(int))
 
     def _choose_video(self):
@@ -239,7 +266,7 @@ class App:
     def _update_dashboard(self):
         if self.capture is not None and self.capture.isOpened():
             if self.play_state == "paused":
-                self.frame = self.last_frame if self.last_frame is not None else self._create_placeholder_frame()
+                self.frame = self.last_frame.copy() if self.last_frame is not None else self._create_placeholder_frame()
             else:
                 ret, frame = self.capture.read()
                 if ret:
@@ -249,11 +276,11 @@ class App:
                 else:
                     self.play_state = "ended"
                     if self.last_frame is not None:
-                        self.frame = self.last_frame
+                        self.frame = self.last_frame.copy()
                     else:
                         self.frame = self._create_placeholder_frame()
         else:
-            self.frame = self.last_frame if self.last_frame is not None else self._create_placeholder_frame()
+            self.frame = self.last_frame.copy() if self.last_frame is not None else self._create_placeholder_frame()
             if self.play_state == "idle":
                 self.frame = self._create_placeholder_frame()
 
@@ -288,6 +315,11 @@ class App:
 
         self.formula_var.set(f"Formula: |C_frame - C_ref| <= {self.tracker.tolerance}")
         self.target_var.set(f"Target Ref Color: {color_info['bgr_str']}")
+        if self.tracker.reference_color is not None:
+            blue, green, red = map(int, self.tracker.reference_color)
+            self.target_color_preview.config(bg=f"#{red:02x}{green:02x}{blue:02x}")
+        else:
+            self.target_color_preview.config(bg="#2b3140")
         self.n_var.set(f"N (pixel count): {color_info['pixel_count']}")
         self.sum_x_var.set(f"Sum X (sum x_i): {color_info['sum_x']}")
         self.sum_y_var.set(f"Sum Y (sum y_i): {color_info['sum_y']}")
