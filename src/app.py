@@ -1,7 +1,6 @@
 import cv2
 import numpy as np
 import tkinter as tk
-from tkinter import ttk
 from PIL import Image, ImageTk
 
 from src.color_tracking import ColorTracker
@@ -25,6 +24,7 @@ class App:
         self.frame = self._create_placeholder_frame()
         self.last_frame = None
         self.video_path = None
+        self.source_type = None
         self.play_state = "idle"
 
         self._build_ui()
@@ -74,17 +74,23 @@ class App:
         }
 
         self.choose_video_btn = tk.Button(controls_frame, text="Choose Video", command=self._choose_video, **button_style)
-        self.choose_video_btn.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        self.choose_video_btn.grid(row=0, column=0, sticky="ew", pady=(0, 6))
 
         self.use_camera_btn = tk.Button(controls_frame, text="Use Camera", command=self._use_camera, **button_style)
-        self.use_camera_btn.grid(row=1, column=0, sticky="ew")
+        self.use_camera_btn.grid(row=1, column=0, sticky="ew", pady=(0, 6))
+
+        self.stop_resume_btn = tk.Button(controls_frame, text="Stop", command=self._toggle_pause_resume, state="disabled", **button_style)
+        self.stop_resume_btn.grid(row=2, column=0, sticky="ew", pady=(0, 6))
+
+        self.retry_btn = tk.Button(controls_frame, text="Retry", command=self._restart_video, state="normal", **button_style)
+        self.retry_btn.grid(row=3, column=0, sticky="ew")
 
         right_panel = tk.Frame(self.root, bg="#1a1f2b")
         right_panel.grid(row=0, column=1, sticky="nsew")
 
         self.header = tk.Label(
             right_panel,
-            text="=== COLOR TRACKING (LK 1) ===",
+            text="=== COLOR TRACKING ===",
             bg="#1a1f2b",
             fg="#ffd000",
             font=("Consolas", 22, "bold"),
@@ -133,8 +139,17 @@ class App:
 
         self.root.bind("<Escape>", lambda event: self.root.destroy())
 
+    def _update_controls_state(self):
+        self.retry_btn.config(state="normal")
+
+        can_toggle_playback = self.play_state in ("playing", "paused")
+        self.stop_resume_btn.config(
+            state="normal" if can_toggle_playback else "disabled",
+            text="Resume" if self.play_state == "paused" else "Stop",
+        )
+
     def _on_video_click(self, event):
-        if self.play_state != "playing":
+        if self.play_state not in ("playing", "paused"):
             return
         if self.frame is None or self.frame.size == 0:
             return
@@ -154,13 +169,28 @@ class App:
         self._set_source("camera")
 
     def _restart_video(self):
+        if self.capture is not None and self.capture.isOpened() and self.source_type == "video":
+            self.capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            self.last_frame = None
+            self.play_state = "playing"
+            self._update_controls_state()
+            return
+
         if self.video_path:
             self._set_source("video", self.video_path)
+
+    def _toggle_pause_resume(self):
+        if self.play_state == "playing":
+            self.play_state = "paused"
+        elif self.play_state == "paused":
+            self.play_state = "playing"
+        self._update_controls_state()
 
     def _set_source(self, source_type, video_path=None):
         if self.capture is not None and self.capture.isOpened():
             self.capture.release()
 
+        self.source_type = source_type
         self.video_path = video_path
         if source_type == "video":
             self.capture = open_video_source(video_path)
@@ -172,26 +202,50 @@ class App:
         else:
             self.play_state = "idle"
 
+        self._update_controls_state()
+
     def _update_dashboard(self):
         if self.capture is not None and self.capture.isOpened():
-            ret, frame = self.capture.read()
-            if ret:
-                self.frame = frame
-                self.last_frame = frame.copy()
-                self.play_state = "playing"
+            if self.play_state == "paused":
+                self.frame = self.last_frame if self.last_frame is not None else self._create_placeholder_frame()
             else:
-                self.play_state = "ended"
-                if self.last_frame is not None:
-                    self.frame = self.last_frame
+                ret, frame = self.capture.read()
+                if ret:
+                    self.frame = frame
+                    self.last_frame = frame.copy()
+                    self.play_state = "playing"
                 else:
-                    self.frame = self._create_placeholder_frame()
+                    self.play_state = "ended"
+                    if self.last_frame is not None:
+                        self.frame = self.last_frame
+                    else:
+                        self.frame = self._create_placeholder_frame()
         else:
             self.frame = self.last_frame if self.last_frame is not None else self._create_placeholder_frame()
             if self.play_state == "idle":
                 self.frame = self._create_placeholder_frame()
 
+        self._update_controls_state()
+
         color_info = self.tracker.update(self.frame)
-        face_status, face_coords, _ = self.face_detector.detect(self.frame)
+        face_status, face_coords, faces = self.face_detector.detect(self.frame)
+
+        cx, cy = color_info.get("center_x"), color_info.get("center_y")
+        if cx is not None and cy is not None:
+            cv2.circle(self.frame, (int(cx), int(cy)), 16, (0, 0, 255), -1)
+            cv2.drawMarker(self.frame, (int(cx), int(cy)), (0, 255, 255), cv2.MARKER_CROSS, 36, 3)
+
+        if len(faces) > 0:
+            fx, fy, fw, fh = map(int, faces[0])
+            cv2.rectangle(self.frame, (fx, fy), (fx + fw, fy + fh), (0, 255, 0), 2)
+        elif face_coords and face_coords != "N/A":
+            try:
+                parts = str(face_coords).replace("x:", " ").replace("y:", " ").replace("w:", " ").replace("h:", " ").replace(",", " ").split()
+                if len(parts) == 4:
+                    fx, fy, fw, fh = map(int, parts)
+                    cv2.rectangle(self.frame, (fx, fy), (fx + fw, fy + fh), (0, 255, 0), 2)
+            except Exception:
+                pass
 
         formatted = cv2.cvtColor(self.frame, cv2.COLOR_BGR2RGB)
         image = Image.fromarray(formatted)
@@ -230,3 +284,7 @@ class App:
 def main():
     app = App()
     app.run()
+
+
+if __name__ == "__main__":
+    main()
