@@ -120,6 +120,7 @@ class App:
         self.header.pack(fill="x", padx=24, pady=(15, 6))
 
         self.formula_var = tk.StringVar(value="Formula: |C_frame - C_ref| <= 25")
+        self.tolerance_input_var = tk.StringVar(value=str(self.tracker.tolerance))
         self.target_var = tk.StringVar(value="Target Ref Color: None")
         self.mask_var = tk.StringVar(value="Current Binary Mask:")
         self.use_contours_var = tk.BooleanVar(value=False)
@@ -128,16 +129,45 @@ class App:
         self.sum_x_var = tk.StringVar(value="Sum X (sum x_i): 0")
         self.sum_y_var = tk.StringVar(value="Sum Y (sum y_i): 0")
         self.result_var = tk.StringVar(value="Result (Xc, Yc): None")
-        self.face_title_var = tk.StringVar(value="=== HAAR CASCADE (LR 3) ===")
+        self.face_title_var = tk.StringVar(value="=== HAAR CASCADE ===")
         self.face_status_var = tk.StringVar(value="Face Status: Not Found")
         self.face_coords_var = tk.StringVar(value="Coords (x,y,w,h): N/A")
-        self.summary_var = tk.StringVar(value="=== COMPARISON SUMMARY ===")
-        self.summary_text1_var = tk.StringVar(value="LK1: Fast pixel search, color-sensitive")
-        self.summary_text2_var = tk.StringVar(value="LR3: Feature-based, robust face detect")
 
         text_style = {"bg": "#1a1f2b", "fg": "white", "font": ("Consolas", 15), "anchor": "w"}
+        entry_style = {
+            "bg": "#0d1117",
+            "fg": "white",
+            "insertbackground": "white",
+            "font": ("Consolas", 14),
+            "relief": "solid",
+            "borderwidth": 1,
+        }
 
         tk.Label(right_panel, textvariable=self.formula_var, **text_style).pack(anchor="w", padx=24, pady=(2, 0))
+        tolerance_row = tk.Frame(right_panel, bg="#1a1f2b")
+        tolerance_row.pack(anchor="w", fill="x", padx=24, pady=(6, 2))
+
+        tk.Label(tolerance_row, text="Tolerance:", **text_style).pack(side="left")
+        tolerance_entry = tk.Entry(tolerance_row, textvariable=self.tolerance_input_var, width=6, **entry_style)
+        tolerance_entry.pack(side="left", padx=(10, 0))
+        tolerance_entry.bind("<Return>", self._on_tolerance_submit)
+        tk.Button(
+            tolerance_row,
+            text="Set",
+            command=self._on_tolerance_submit,
+            bg="#ff7a00",
+            fg="white",
+            activebackground="#ff8f1a",
+            activeforeground="white",
+            font=("Segoe UI", 11, "bold"),
+            bd=0,
+            relief="flat",
+            padx=10,
+            pady=4,
+            highlightthickness=0,
+            cursor="hand2",
+        ).pack(side="left", padx=(10, 0))
+
         target_row = tk.Frame(right_panel, bg="#1a1f2b")
         target_row.pack(anchor="w", fill="x", padx=24, pady=(2, 0))
 
@@ -183,10 +213,6 @@ class App:
         tk.Label(right_panel, textvariable=self.face_status_var, bg="#1a1f2b", fg="#00ff00", font=("Consolas", 15), anchor="w").pack(anchor="w", padx=24)
         tk.Label(right_panel, textvariable=self.face_coords_var, bg="#1a1f2b", fg="#ffffff", font=("Consolas", 15), anchor="w").pack(anchor="w", padx=24, pady=(0, 12))
 
-        tk.Label(right_panel, textvariable=self.summary_var, bg="#1a1f2b", fg="#ffffff", font=("Consolas", 18, "bold"), anchor="w").pack(anchor="w", padx=24, pady=(4, 4))
-        tk.Label(right_panel, textvariable=self.summary_text1_var, bg="#1a1f2b", fg="#d0d0d0", font=("Consolas", 14), anchor="w").pack(anchor="w", padx=24)
-        tk.Label(right_panel, textvariable=self.summary_text2_var, bg="#1a1f2b", fg="#d0d0d0", font=("Consolas", 14), anchor="w").pack(anchor="w", padx=24)
-
         self.root.bind("<Escape>", lambda event: self.root.destroy())
 
     def _update_controls_state(self):
@@ -197,6 +223,17 @@ class App:
             state="normal" if can_toggle_playback else "disabled",
             text="Resume" if self.play_state == "paused" else "Stop",
         )
+
+    def _on_tolerance_submit(self, event=None):
+        try:
+            tolerance = int(self.tolerance_input_var.get().strip())
+        except ValueError:
+            self.tolerance_input_var.set(str(self.tracker.tolerance))
+            return
+
+        tolerance = max(0, tolerance)
+        self.tracker.tolerance = tolerance
+        self.tolerance_input_var.set(str(tolerance))
 
     def _on_video_click(self, event):
         if self.play_state not in ("playing", "paused"):
