@@ -101,6 +101,7 @@ class App:
         self.formula_var = tk.StringVar(value="Formula: |C_frame - C_ref| <= 25")
         self.target_var = tk.StringVar(value="Target Ref Color: None")
         self.mask_var = tk.StringVar(value="Current Binary Mask:")
+        self.use_contours_var = tk.BooleanVar(value=False)
         self.center_title_var = tk.StringVar(value="=== CENTER OF MASS (Xc, Yc) ===")
         self.n_var = tk.StringVar(value="N (pixel count): 0")
         self.sum_x_var = tk.StringVar(value="Sum X (sum x_i): 0")
@@ -117,6 +118,21 @@ class App:
 
         tk.Label(right_panel, textvariable=self.formula_var, **text_style).pack(anchor="w", padx=24, pady=(2, 0))
         tk.Label(right_panel, textvariable=self.target_var, **text_style).pack(anchor="w", padx=24, pady=(2, 0))
+        tk.Checkbutton(
+            right_panel,
+            text="Use findContours filter",
+            variable=self.use_contours_var,
+            onvalue=True,
+            offvalue=False,
+            bg="#1a1f2b",
+            fg="#ffffff",
+            activebackground="#1a1f2b",
+            activeforeground="#ffffff",
+            selectcolor="#2b3140",
+            font=("Consolas", 13),
+            anchor="w",
+            padx=4,
+        ).pack(anchor="w", padx=24, pady=(4, 2))
         tk.Label(right_panel, textvariable=self.mask_var, **text_style).pack(anchor="w", padx=24, pady=(10, 6))
 
         self.mask_preview = tk.Label(right_panel, bg="#000000", width=320, height=180, relief="solid", borderwidth=2)
@@ -227,7 +243,7 @@ class App:
 
         self._update_controls_state()
 
-        color_info = self.tracker.update(self.frame)
+        color_info = self.tracker.update(self.frame, use_contours=self.use_contours_var.get())
         face_status, face_coords, faces = self.face_detector.detect(self.frame)
 
         cx, cy = color_info.get("center_x"), color_info.get("center_y")

@@ -1,3 +1,4 @@
+import cv2
 import numpy as np
 
 from src.config import DEFAULT_TOLERANCE
@@ -14,7 +15,7 @@ class ColorTracker:
     def clear_reference(self):
         self.reference_color = None
 
-    def update(self, frame):
+    def update(self, frame, use_contours=False):
         height, width = frame.shape[:2]
         binary_mask = np.zeros((height, width), dtype=np.uint8)
         bgr_str = "None"
@@ -37,7 +38,18 @@ class ColorTracker:
                 & (diff[:, :, 2] <= self.tolerance)
             )
             binary_mask = (match_mask * 255).astype(np.uint8)
-            ys, xs = np.where(match_mask)
+
+            if use_contours:
+                contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                if contours:
+                    largest_contour = max(contours, key=cv2.contourArea)
+                    filtered_mask = np.zeros_like(binary_mask)
+                    cv2.drawContours(filtered_mask, [largest_contour], -1, 255, thickness=-1)
+                    binary_mask = filtered_mask
+                else:
+                    binary_mask = np.zeros_like(binary_mask)
+
+            ys, xs = np.where(binary_mask > 0)
             pixel_count = len(xs)
 
             if pixel_count > 0:
