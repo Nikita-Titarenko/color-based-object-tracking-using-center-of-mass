@@ -1,6 +1,6 @@
 import cv2
 
-WINDOW_NAME = "Analytics Dashboard"
+WINDOW_NAME = "Color-based Centroid Tracking and Haar Cascade Classifier"
 PANEL_WIDTH = 650
 VIDEO_WIDTH = 640
 VIDEO_HEIGHT = 480
