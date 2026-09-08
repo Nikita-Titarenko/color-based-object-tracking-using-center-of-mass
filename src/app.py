@@ -1,3 +1,5 @@
+import time
+
 import cv2
 import numpy as np
 import tkinter as tk
@@ -32,8 +34,13 @@ class App:
         self.play_state = "idle"
         self.mask_probe_point = None
         self.last_face_analysis = None
+        self.last_color_info = None
+        self.active_sidebar_panel = "centroid"
+        self.last_frame_time = None
+        self.current_fps = 0.0
 
         self._build_ui()
+        self._set_sidebar_panel("centroid")
         self._update_dashboard()
 
     def _create_placeholder_frame(self):
@@ -111,9 +118,21 @@ class App:
 
         left_panel = tk.Frame(self.root, bg="#0d1117")
         left_panel.grid(row=0, column=0, sticky="nsew")
-        left_panel.grid_rowconfigure(0, weight=1)
-        left_panel.grid_rowconfigure(1, weight=0)
+        left_panel.grid_rowconfigure(0, weight=0)
+        left_panel.grid_rowconfigure(1, weight=1)
+        left_panel.grid_rowconfigure(2, weight=0)
         left_panel.grid_columnconfigure(0, weight=1)
+
+        self.fps_var = tk.StringVar(value="FPS: 0.0")
+        self.fps_label = tk.Label(
+            left_panel,
+            textvariable=self.fps_var,
+            bg="#0d1117",
+            fg="#dfe8ff",
+            font=("Consolas", 12, "bold"),
+            anchor="w",
+        )
+        self.fps_label.grid(row=0, column=0, sticky="ew", padx=18, pady=(18, 4))
 
         self.video_area = tk.Label(
             left_panel,
@@ -122,11 +141,11 @@ class App:
             anchor="center",
             justify="center",
         )
-        self.video_area.grid(row=0, column=0, sticky="nsew", padx=18, pady=(18, 10))
+        self.video_area.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 10))
         self.video_area.bind("<Button-1>", self._on_video_click)
 
         controls_frame = tk.Frame(left_panel, bg="#0d1117")
-        controls_frame.grid(row=1, column=0, sticky="ew", padx=18, pady=(0, 18))
+        controls_frame.grid(row=2, column=0, sticky="ew", padx=18, pady=(0, 18))
         controls_frame.grid_columnconfigure(0, weight=1)
 
         button_style = {
@@ -190,15 +209,59 @@ class App:
         sidebar_canvas.bind("<Configure>", _resize_sidebar_content)
         self.root.bind_all("<MouseWheel>", _on_sidebar_mousewheel, add="+")
 
+        self.sidebar_tabs = tk.Frame(right_panel, bg="#1a1f2b")
+        self.sidebar_tabs.pack(fill="x", padx=20, pady=(15, 6))
+        self.sidebar_tabs.grid_columnconfigure(0, weight=1)
+        self.sidebar_tabs.grid_columnconfigure(1, weight=1)
+
+        self.centroid_tab = tk.Button(
+            self.sidebar_tabs,
+            text="Center of Mass",
+            command=lambda: self._set_sidebar_panel("centroid"),
+            bg="#ff7a00",
+            fg="white",
+            activebackground="#ff8f1a",
+            activeforeground="white",
+            font=("Segoe UI", 11, "bold"),
+            bd=0,
+            relief="flat",
+            padx=12,
+            pady=8,
+            cursor="hand2",
+        )
+        self.haar_tab = tk.Button(
+            self.sidebar_tabs,
+            text="Haar Cascade",
+            command=lambda: self._set_sidebar_panel("haar"),
+            bg="#2b3140",
+            fg="white",
+            activebackground="#3a4154",
+            activeforeground="white",
+            font=("Segoe UI", 11, "bold"),
+            bd=0,
+            relief="flat",
+            padx=12,
+            pady=8,
+            cursor="hand2",
+        )
+        self.centroid_tab.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        self.haar_tab.grid(row=0, column=1, sticky="ew", padx=(4, 0))
+
+        self.centroid_panel = tk.Frame(right_panel, bg="#1a1f2b")
+        self.haar_panel = tk.Frame(right_panel, bg="#1a1f2b")
+        self.centroid_panel.pack(fill="both", expand=True)
+        self.haar_panel.pack(fill="both", expand=True)
+        self.haar_panel.pack_forget()
+
         self.header = tk.Label(
-            right_panel,
+            self.centroid_panel,
             text="=== COLOR TRACKING ===",
             bg="#1a1f2b",
             fg="#ffd000",
             font=("Consolas", 13, "bold"),
             anchor="w",
         )
-        self.header.pack(fill="x", padx=24, pady=(15, 6))
+        self.header.pack(fill="x", padx=24, pady=(0, 6))
 
         self.tolerance_input_var = tk.StringVar(value=str(self.tracker.tolerance))
         self.target_var = tk.StringVar(value="Target Ref Color: None")
@@ -215,8 +278,7 @@ class App:
         self.candidate_index_var = tk.StringVar(value="Candidate: N/A")
         self.haar_feature_index_var = tk.StringVar(value="Feature: N/A")
         self.haar_feature_info_var = tk.StringVar(value="Feature: N/A")
-        self.haar_feature_calc_var = tk.StringVar(value="Response calc: N/A")
-        self.haar_feature_response_var = tk.StringVar(value="Response: N/A")
+        self.haar_feature_calc_var = tk.StringVar(value="Feature value: N/A")
         self.haar_feature_xml_threshold_var = tk.StringVar(value="XML threshold: N/A")
         self.haar_feature_threshold_calc_var = tk.StringVar(value="Normalized threshold calc: N/A")
         self.haar_feature_compare_var = tk.StringVar(value="Compare: N/A")
@@ -245,7 +307,7 @@ class App:
             "borderwidth": 1,
         }
 
-        tolerance_row = tk.Frame(right_panel, bg="#1a1f2b")
+        tolerance_row = tk.Frame(self.centroid_panel, bg="#1a1f2b")
         tolerance_row.pack(anchor="w", fill="x", padx=24, pady=(6, 2))
 
         tk.Label(tolerance_row, text="Tolerance:", **text_style).pack(side="left")
@@ -269,7 +331,7 @@ class App:
             cursor="hand2",
         ).pack(side="left", padx=(10, 0))
 
-        target_row = tk.Frame(right_panel, bg="#1a1f2b")
+        target_row = tk.Frame(self.centroid_panel, bg="#1a1f2b")
         target_row.pack(anchor="w", fill="x", padx=24, pady=(2, 0))
 
         tk.Label(target_row, textvariable=self.target_var, **text_style).pack(side="left")
@@ -284,7 +346,7 @@ class App:
         self.target_color_preview.pack(side="left", padx=(10, 0), ipady=6)
 
         tk.Checkbutton(
-            right_panel,
+            self.centroid_panel,
             text="Use findContours filter",
             variable=self.use_contours_var,
             onvalue=True,
@@ -298,9 +360,9 @@ class App:
             anchor="w",
             padx=4,
         ).pack(anchor="w", padx=24, pady=(4, 2))
-        tk.Label(right_panel, textvariable=self.mask_var, **text_style).pack(anchor="w", padx=24, pady=(10, 6))
+        tk.Label(self.centroid_panel, textvariable=self.mask_var, **text_style).pack(anchor="w", padx=24, pady=(10, 6))
 
-        mask_panel = tk.Frame(right_panel, bg="#1a1f2b")
+        mask_panel = tk.Frame(self.centroid_panel, bg="#1a1f2b")
         mask_panel.pack(anchor="w", padx=24, pady=(0, 10))
 
         self.mask_preview = tk.Label(mask_panel, bg="#000000", width=380, height=220, relief="solid", borderwidth=2)
@@ -328,44 +390,58 @@ class App:
         tk.Label(mask_panel, textvariable=self.mask_probe_check_var, bg="#1a1f2b", fg="#d0d0d0", font=("Consolas", 12), anchor="w", justify="left", wraplength=330).pack(anchor="w", fill="x", padx=0, pady=(0, 6))
         tk.Label(mask_panel, textvariable=self.mask_probe_inclusion_var, bg="#1a1f2b", fg="#d0d0d0", font=("Consolas", 12), anchor="w", justify="left", wraplength=330).pack(anchor="w", fill="x", padx=0, pady=(0, 6))
 
-        tk.Label(right_panel, textvariable=self.center_title_var, bg="#1a1f2b", fg="#ffffff", font=("Consolas", 12, "bold"), anchor="w").pack(anchor="w", padx=24, pady=(10, 4))
-        tk.Label(right_panel, textvariable=self.n_var, **text_style).pack(anchor="w", padx=24)
-        tk.Label(right_panel, textvariable=self.sum_x_var, **text_style).pack(anchor="w", padx=24)
-        tk.Label(right_panel, textvariable=self.sum_y_var, **text_style).pack(anchor="w", padx=24)
-        tk.Label(right_panel, textvariable=self.result_var, bg="#1a1f2b", fg="#ffffff", font=("Consolas", 12, "bold"), anchor="w").pack(anchor="w", padx=24, pady=(4, 12))
+        tk.Label(self.centroid_panel, textvariable=self.center_title_var, bg="#1a1f2b", fg="#ffffff", font=("Consolas", 12, "bold"), anchor="w").pack(anchor="w", padx=24, pady=(10, 4))
+        tk.Label(self.centroid_panel, textvariable=self.n_var, **text_style).pack(anchor="w", padx=24)
+        tk.Label(self.centroid_panel, textvariable=self.sum_x_var, **text_style).pack(anchor="w", padx=24)
+        tk.Label(self.centroid_panel, textvariable=self.sum_y_var, **text_style).pack(anchor="w", padx=24)
+        tk.Label(self.centroid_panel, textvariable=self.result_var, bg="#1a1f2b", fg="#ffffff", font=("Consolas", 12, "bold"), anchor="w").pack(anchor="w", padx=24, pady=(4, 12))
 
-        tk.Label(right_panel, textvariable=self.face_title_var, bg="#1a1f2b", fg="#00ff00", font=("Consolas", 13, "bold"), anchor="w").pack(anchor="w", padx=24, pady=(4, 4))
-        self.face_preview = tk.Label(right_panel, bg="#000000", width=380, height=220, relief="solid", borderwidth=2)
+        tk.Label(self.haar_panel, textvariable=self.face_title_var, bg="#1a1f2b", fg="#00ff00", font=("Consolas", 13, "bold"), anchor="w").pack(anchor="w", padx=24, pady=(4, 4))
+        self.face_preview = tk.Label(self.haar_panel, bg="#000000", width=380, height=220, relief="solid", borderwidth=2)
         self.face_preview.pack_propagate(False)
         self.face_preview.pack(anchor="w", padx=24, pady=(0, 10))
-        candidate_nav_row = tk.Frame(right_panel, bg="#1a1f2b")
+        candidate_nav_row = tk.Frame(self.haar_panel, bg="#1a1f2b")
         candidate_nav_row.pack(anchor="w", padx=24, pady=(0, 8))
         tk.Button(candidate_nav_row, text="<", command=lambda: self._shift_candidate(-1), bg="#2b3140", fg="white", activebackground="#3a4154", activeforeground="white", font=("Consolas", 12, "bold"), bd=0, relief="flat", width=4, cursor="hand2").pack(side="left")
         tk.Label(candidate_nav_row, textvariable=self.candidate_index_var, bg="#1a1f2b", fg="#ffffff", font=("Consolas", 12), anchor="center", width=32).pack(side="left", padx=8)
         tk.Button(candidate_nav_row, text=">", command=lambda: self._shift_candidate(1), bg="#2b3140", fg="white", activebackground="#3a4154", activeforeground="white", font=("Consolas", 12, "bold"), bd=0, relief="flat", width=4, cursor="hand2").pack(side="left")
-        feature_nav_row = tk.Frame(right_panel, bg="#1a1f2b")
+        feature_nav_row = tk.Frame(self.haar_panel, bg="#1a1f2b")
         feature_nav_row.pack(anchor="w", padx=24, pady=(0, 8))
         tk.Button(feature_nav_row, text="<", command=lambda: self._shift_feature(-1), bg="#2b3140", fg="white", activebackground="#3a4154", activeforeground="white", font=("Consolas", 12, "bold"), bd=0, relief="flat", width=4, cursor="hand2").pack(side="left")
         tk.Label(feature_nav_row, textvariable=self.haar_feature_index_var, bg="#1a1f2b", fg="#ffffff", font=("Consolas", 12), anchor="center", width=32).pack(side="left", padx=8)
         tk.Button(feature_nav_row, text=">", command=lambda: self._shift_feature(1), bg="#2b3140", fg="white", activebackground="#3a4154", activeforeground="white", font=("Consolas", 12, "bold"), bd=0, relief="flat", width=4, cursor="hand2").pack(side="left")
-        tk.Label(right_panel, textvariable=self.face_status_var, bg="#1a1f2b", fg="#00ff00", font=("Consolas", 12), anchor="w").pack(anchor="w", padx=24)
-        tk.Label(right_panel, textvariable=self.haar_feature_title_var, bg="#1a1f2b", fg="#ffffff", font=("Consolas", 12, "bold"), anchor="w").pack(anchor="w", padx=24, pady=(8, 2))
-        
+        tk.Label(self.haar_panel, textvariable=self.face_status_var, bg="#1a1f2b", fg="#00ff00", font=("Consolas", 12), anchor="w").pack(anchor="w", padx=24)
+        tk.Label(self.haar_panel, textvariable=self.haar_feature_title_var, bg="#1a1f2b", fg="#ffffff", font=("Consolas", 12, "bold"), anchor="w").pack(anchor="w", padx=24, pady=(8, 2))
 
-        tk.Label(right_panel, textvariable=self.haar_feature_calc_var, bg="#1a1f2b", fg="#ffffff", font=("Consolas", 12), anchor="w", justify="left", wraplength=330).pack(anchor="w", padx=24)
-        tk.Label(right_panel, textvariable=self.haar_feature_response_var, bg="#1a1f2b", fg="#ffffff", font=("Consolas", 12), anchor="w").pack(anchor="w", padx=24)
-        tk.Label(right_panel, textvariable=self.haar_feature_xml_threshold_var, bg="#1a1f2b", fg="#ffffff", font=("Consolas", 12), anchor="w").pack(anchor="w", padx=24)
-        tk.Label(right_panel, textvariable=self.haar_feature_threshold_calc_var, bg="#1a1f2b", fg="#ffffff", font=("Consolas", 12), anchor="w", justify="left", wraplength=330).pack(anchor="w", padx=24)
-        tk.Label(right_panel, textvariable=self.haar_feature_compare_var, bg="#1a1f2b", fg="#ffffff", font=("Consolas", 12), anchor="w").pack(anchor="w", padx=24)
-        tk.Label(right_panel, textvariable=self.haar_feature_leafs_var, bg="#1a1f2b", fg="#ffffff", font=("Consolas", 12), anchor="w", justify="left", wraplength=330).pack(anchor="w", padx=24)
-        tk.Label(right_panel, textvariable=self.haar_feature_pass_var, bg="#1a1f2b", fg="#ffffff", font=("Consolas", 12), anchor="w").pack(anchor="w", padx=24)
-        tk.Label(right_panel, textvariable=self.haar_feature_decision_var, bg="#1a1f2b", fg="#ffffff", font=("Consolas", 12), anchor="w").pack(anchor="w", padx=24, pady=(0, 12))
-        tk.Label(right_panel, textvariable=self.haar_stage_title_var, bg="#1a1f2b", fg="#ffffff", font=("Consolas", 12, "bold"), anchor="w").pack(anchor="w", padx=24, pady=(0, 2))
-        tk.Label(right_panel, textvariable=self.haar_stage_info_var, bg="#1a1f2b", fg="#ffffff", font=("Consolas", 12), anchor="w", justify="left", wraplength=330).pack(anchor="w", padx=24)
-        tk.Label(right_panel, textvariable=self.haar_stage_compare_var, bg="#1a1f2b", fg="#ffffff", font=("Consolas", 12), anchor="w", justify="left", wraplength=330).pack(anchor="w", padx=24)
-        tk.Label(right_panel, textvariable=self.haar_stage_pass_var, bg="#1a1f2b", fg="#ffffff", font=("Consolas", 12), anchor="w").pack(anchor="w", padx=24, pady=(0, 12))
+        tk.Label(self.haar_panel, textvariable=self.haar_feature_calc_var, bg="#1a1f2b", fg="#ffffff", font=("Consolas", 12), anchor="w", justify="left", wraplength=330).pack(anchor="w", padx=24)
+        tk.Label(self.haar_panel, textvariable=self.haar_feature_xml_threshold_var, bg="#1a1f2b", fg="#ffffff", font=("Consolas", 12), anchor="w").pack(anchor="w", padx=24)
+        tk.Label(self.haar_panel, textvariable=self.haar_feature_threshold_calc_var, bg="#1a1f2b", fg="#ffffff", font=("Consolas", 12), anchor="w", justify="left", wraplength=330).pack(anchor="w", padx=24)
+        tk.Label(self.haar_panel, textvariable=self.haar_feature_compare_var, bg="#1a1f2b", fg="#ffffff", font=("Consolas", 12), anchor="w").pack(anchor="w", padx=24)
+        tk.Label(self.haar_panel, textvariable=self.haar_feature_leafs_var, bg="#1a1f2b", fg="#ffffff", font=("Consolas", 12), anchor="w", justify="left", wraplength=330).pack(anchor="w", padx=24)
+        tk.Label(self.haar_panel, textvariable=self.haar_feature_pass_var, bg="#1a1f2b", fg="#ffffff", font=("Consolas", 12), anchor="w").pack(anchor="w", padx=24)
+        tk.Label(self.haar_panel, textvariable=self.haar_feature_decision_var, bg="#1a1f2b", fg="#ffffff", font=("Consolas", 12), anchor="w").pack(anchor="w", padx=24, pady=(0, 12))
+        tk.Label(self.haar_panel, textvariable=self.haar_stage_title_var, bg="#1a1f2b", fg="#ffffff", font=("Consolas", 12, "bold"), anchor="w").pack(anchor="w", padx=24, pady=(0, 2))
+        tk.Label(self.haar_panel, textvariable=self.haar_stage_info_var, bg="#1a1f2b", fg="#ffffff", font=("Consolas", 12), anchor="w", justify="left", wraplength=330).pack(anchor="w", padx=24)
+        tk.Label(self.haar_panel, textvariable=self.haar_stage_compare_var, bg="#1a1f2b", fg="#ffffff", font=("Consolas", 12), anchor="w", justify="left", wraplength=330).pack(anchor="w", padx=24)
+        tk.Label(self.haar_panel, textvariable=self.haar_stage_pass_var, bg="#1a1f2b", fg="#ffffff", font=("Consolas", 12), anchor="w").pack(anchor="w", padx=24, pady=(0, 12))
 
         self.root.bind("<Escape>", lambda event: self.root.destroy())
+
+    def _set_sidebar_panel(self, panel_name):
+        if panel_name not in {"centroid", "haar"}:
+            return
+
+        self.active_sidebar_panel = panel_name
+        if panel_name == "centroid":
+            self.centroid_panel.pack(fill="both", expand=True)
+            self.haar_panel.pack_forget()
+            self.centroid_tab.config(bg="#ff7a00", activebackground="#ff8f1a")
+            self.haar_tab.config(bg="#2b3140", activebackground="#3a4154")
+        else:
+            self.haar_panel.pack(fill="both", expand=True)
+            self.centroid_panel.pack_forget()
+            self.haar_tab.config(bg="#ff7a00", activebackground="#ff8f1a")
+            self.centroid_tab.config(bg="#2b3140", activebackground="#3a4154")
 
     def _update_controls_state(self):
         self.retry_btn.config(state="normal")
@@ -543,74 +619,226 @@ class App:
         self._update_controls_state()
 
     def _update_dashboard(self):
+        now = time.perf_counter()
         if self.capture is not None and self.capture.isOpened():
             if self.play_state == "paused":
                 self.frame = self.last_frame.copy() if self.last_frame is not None else self._create_placeholder_frame()
+                self.current_fps = 0.0
             else:
                 ret, frame = self.capture.read()
                 if ret:
+                    if self.last_frame_time is not None:
+                        elapsed = now - self.last_frame_time
+                        self.current_fps = 1.0 / elapsed if elapsed > 0 else 0.0
+                    else:
+                        self.current_fps = 0.0
+                    self.last_frame_time = now
                     self.frame = frame
                     self.last_frame = frame.copy()
                     self.play_state = "playing"
                 else:
                     self.play_state = "ended"
+                    self.current_fps = 0.0
                     if self.last_frame is not None:
                         self.frame = self.last_frame.copy()
                     else:
                         self.frame = self._create_placeholder_frame()
+                    self.last_frame_time = None
         else:
             self.frame = self.last_frame.copy() if self.last_frame is not None else self._create_placeholder_frame()
             if self.play_state == "idle":
                 self.frame = self._create_placeholder_frame()
+            self.current_fps = 0.0
+            self.last_frame_time = None
 
+        self.fps_var.set(f"FPS: {self.current_fps:.1f}")
         self._update_controls_state()
 
-        color_info = self.tracker.update(self.frame, use_contours=self.use_contours_var.get())
-        self._update_mask_probe(color_info)
-        if self.play_state == "paused" and self.last_face_analysis is not None:
-            face_status, face_coords, faces, candidates = self.last_face_analysis
+        centroid_active = self.active_sidebar_panel == "centroid"
+        haar_active = self.active_sidebar_panel == "haar"
+
+        if centroid_active:
+            color_info = self.tracker.update(self.frame, use_contours=self.use_contours_var.get())
+            self.last_color_info = color_info
+            self._update_mask_probe(color_info)
+            cx, cy = color_info.get("center_x"), color_info.get("center_y")
+            if cx is not None and cy is not None:
+                cv2.circle(self.frame, (int(cx), int(cy)), 16, (0, 0, 255), -1)
+                cv2.drawMarker(self.frame, (int(cx), int(cy)), (0, 255, 255), cv2.MARKER_CROSS, 36, 3)
+
+            self.target_var.set(f"Target Ref Color: {color_info['bgr_str']}")
+            if self.tracker.reference_color is not None:
+                blue, green, red = map(int, self.tracker.reference_color)
+                self.target_color_preview.config(bg=f"#{red:02x}{green:02x}{blue:02x}")
+            else:
+                self.target_color_preview.config(bg="#2b3140")
+            self.n_var.set(f"N (pixel count): {color_info['pixel_count']}")
+            self.sum_x_var.set(f"Sum X (sum x_i): {color_info['sum_x']}")
+            self.sum_y_var.set(f"Sum Y (sum y_i): {color_info['sum_y']}")
+            center = f"({color_info['center_x']}, {color_info['center_y']})" if color_info['center_x'] is not None else "None"
+            self.result_var.set(f"Result (Xc, Yc): {center}")
+
+            mask = color_info["binary_mask"]
+            if mask.size:
+                mask_image = self._fit_mask_to_preview(mask)
+                mask_photo = ImageTk.PhotoImage(mask_image)
+                self.mask_preview.config(image=mask_photo)
+                self.mask_preview.image = mask_photo
+            else:
+                self.mask_preview.config(image='')
         else:
-            face_status, face_coords, faces, candidates = self.face_detector.detect(self.frame)
-            candidates = sorted(candidates, key=lambda rect: (int(rect[0]), int(rect[1]), int(rect[2]), int(rect[3])))
-            self.last_face_analysis = (face_status, face_coords, faces, candidates)
-        face_region = None
-        selected_candidate = None
-        candidate_count = len(candidates)
-        if candidate_count > 0:
-            self.current_candidate_index = self.current_candidate_index % candidate_count
-            selected_candidate = tuple(map(int, candidates[self.current_candidate_index]))
-            face_region = selected_candidate
-            sx, sy, sw, sh = selected_candidate
-            self.candidate_index_var.set(f"Candidate: {self.current_candidate_index + 1} / {candidate_count}")
-        else:
-            self.current_candidate_index = 0
-            self.candidate_index_var.set("Candidate: N/A")
+            self._update_mask_probe({"binary_mask": np.zeros((1, 1), dtype=np.uint8)})
+            self.target_var.set("Target Ref Color: disabled")
+            self.n_var.set("N (pixel count): disabled")
+            self.sum_x_var.set("Sum X (sum x_i): disabled")
+            self.sum_y_var.set("Sum Y (sum y_i): disabled")
+            self.result_var.set("Result (Xc, Yc): disabled")
+            self.mask_preview.config(image='')
+            self.target_color_preview.config(bg="#2b3140")
+
+        if haar_active:
+            if self.play_state == "paused" and self.last_face_analysis is not None:
+                face_status, face_coords, faces, candidates = self.last_face_analysis
+            else:
+                face_status, face_coords, faces, candidates = self.face_detector.detect(self.frame)
+                candidates = sorted(candidates, key=lambda rect: (int(rect[0]), int(rect[1]), int(rect[2]), int(rect[3])))
+                self.last_face_analysis = (face_status, face_coords, faces, candidates)
+            face_region = None
+            selected_candidate = None
+            candidate_count = len(candidates)
+            if candidate_count > 0:
+                self.current_candidate_index = self.current_candidate_index % candidate_count
+                selected_candidate = tuple(map(int, candidates[self.current_candidate_index]))
+                face_region = selected_candidate
+                self.candidate_index_var.set(f"Candidate: {self.current_candidate_index + 1} / {candidate_count}")
+            else:
+                self.current_candidate_index = 0
+                self.candidate_index_var.set("Candidate: N/A")
+                if len(faces) > 0:
+                    fx, fy, fw, fh = map(int, faces[0])
+                    face_region = (fx, fy, fw, fh)
+
             if len(faces) > 0:
                 fx, fy, fw, fh = map(int, faces[0])
-                face_region = (fx, fy, fw, fh)
+                cv2.rectangle(self.frame, (fx, fy), (fx + fw, fy + fh), (0, 255, 0), 2)
+            elif face_coords and face_coords != "N/A":
+                try:
+                    parts = str(face_coords).replace("x:", " ").replace("y:", " ").replace("w:", " ").replace("h:", " ").replace(",", " ").split()
+                    if len(parts) == 4:
+                        fx, fy, fw, fh = map(int, parts)
+                        cv2.rectangle(self.frame, (fx, fy), (fx + fw, fy + fh), (0, 255, 0), 2)
+                except Exception:
+                    pass
 
-        frame_for_haar = self.frame.copy()
+            self.face_status_var.set(f"Face Status: {face_status}")
+            face_image = self.haar_inspector.render_feature_overlay(self.frame.copy(), self.current_feature_index, face_region)
+            face_preview_bgr = cv2.cvtColor(np.array(face_image), cv2.COLOR_RGB2BGR)
+            frame_h, frame_w = face_preview_bgr.shape[:2]
+            _, _, preview_w, preview_h, _, _ = self._get_face_preview_geometry(frame_w, frame_h)
+            preview_scale = min(preview_w / max(frame_w, 1), preview_h / max(frame_h, 1))
+            preview_rect_thickness = max(2, int(round(2 / max(preview_scale, 1e-6))))
+            if len(faces) > 0:
+                fx, fy, fw, fh = map(int, faces[0])
+                cv2.rectangle(face_preview_bgr, (fx, fy), (fx + fw, fy + fh), (0, 255, 0), preview_rect_thickness)
+            if selected_candidate is not None:
+                cx, cy, cw, ch = selected_candidate
+                cv2.rectangle(face_preview_bgr, (cx, cy), (cx + cw, cy + ch), (255, 0, 0), preview_rect_thickness)
+            face_image = Image.fromarray(cv2.cvtColor(face_preview_bgr, cv2.COLOR_BGR2RGB))
+            face_image = self._fit_face_to_preview(face_image)
+            face_photo = ImageTk.PhotoImage(face_image)
+            self.face_preview.config(image=face_photo)
+            self.face_preview.image = face_photo
 
-        cx, cy = color_info.get("center_x"), color_info.get("center_y")
-        if cx is not None and cy is not None:
-            cv2.circle(self.frame, (int(cx), int(cy)), 16, (0, 0, 255), -1)
-            cv2.drawMarker(self.frame, (int(cx), int(cy)), (0, 255, 255), cv2.MARKER_CROSS, 36, 3)
+            feature_count = self.haar_inspector.get_feature_count()
+            if feature_count > 0:
+                effective_index = self.current_feature_index % feature_count
+                self.current_feature_index = effective_index
+                haar_result = self.haar_inspector.evaluate_feature(self.frame.copy(), effective_index, face_region)
+                self.haar_feature_title_var.set(f"Feature #{effective_index + 1}")
+                self.haar_feature_index_var.set(f"Feature: {effective_index + 1} / {feature_count}")
+                self.haar_feature_info_var.set("")
+            else:
+                haar_result = {
+                    "weighted_sum": 0.0,
+                    "normalization": 1.0,
+                    "variance_norm_factor": 1.0,
+                    "effective_threshold": 0.0,
+                    "response": 0.0,
+                    "threshold": 0.0,
+                    "passed": False,
+                    "left_value": 0.0,
+                    "right_value": 0.0,
+                    "selected_branch": "N/A",
+                    "selected_leaf_value": 0.0,
+                    "stage_index": None,
+                    "stage_sum": 0.0,
+                    "stage_threshold": 0.0,
+                    "stage_passed": False,
+                    "matched": False,
+                }
+                self.haar_feature_title_var.set("Feature: N/A")
+                self.haar_feature_index_var.set("Feature: N/A")
+                self.haar_feature_info_var.set("")
 
-        if len(faces) > 0:
-            fx, fy, fw, fh = map(int, faces[0])
-            cv2.rectangle(self.frame, (fx, fy), (fx + fw, fy + fh), (0, 255, 0), 2)
-        elif face_coords and face_coords != "N/A":
-            try:
-                parts = str(face_coords).replace("x:", " ").replace("y:", " ").replace("w:", " ").replace("h:", " ").replace(",", " ").split()
-                if len(parts) == 4:
-                    fx, fy, fw, fh = map(int, parts)
-                    cv2.rectangle(self.frame, (fx, fy), (fx + fw, fy + fh), (0, 255, 0), 2)
-            except Exception:
-                pass
+            self.haar_feature_calc_var.set(
+                f"Weighted sum (raw): {haar_result['weighted_sum']:.2f}\nNormalization area: {haar_result['normalization']:.2f}\nFeature value: {haar_result['weighted_sum']:.2f} / {haar_result['normalization']:.2f} = {haar_result['response']:.6f}\nVariance normalization factor: {haar_result['variance_norm_factor']:.6f}"
+            )
+            self.haar_feature_xml_threshold_var.set(
+                f"XML threshold: {haar_result['threshold']:.6f}"
+            )
+            self.haar_feature_threshold_calc_var.set(
+                f"Normalized threshold calc: {haar_result['threshold']:.6f} * {haar_result['variance_norm_factor']:.6f} = {haar_result['effective_threshold']:.6f}"
+            )
+            compare_sign = ">=" if haar_result["passed"] else "<"
+            self.haar_feature_compare_var.set(
+                f"Compare: {haar_result['response']:.6f} {compare_sign} {haar_result['effective_threshold']:.6f}"
+            )
+            self.haar_feature_leafs_var.set(
+                f"Leaf values: left={haar_result['left_value']:.6f} | right={haar_result['right_value']:.6f}"
+            )
+            self.haar_feature_pass_var.set(f"Feature passed: {haar_result['passed']}")
+            if haar_result.get("matched"):
+                decision = haar_result["selected_branch"]
+                leaf_value = haar_result["selected_leaf_value"]
+                self.haar_feature_decision_var.set(
+                    f"Selected branch: {decision} | selected leaf value: {leaf_value:.6f}"
+                )
+            else:
+                self.haar_feature_decision_var.set("Selected branch: N/A")
 
-        if selected_candidate is not None:
-            cx, cy, cw, ch = selected_candidate
-            cv2.rectangle(self.frame, (cx, cy), (cx + cw, cy + ch), (255, 0, 0), 2)
+            if haar_result.get("stage_index") is not None:
+                stage_display = int(haar_result["stage_index"]) + 1
+                self.haar_stage_title_var.set(f"Stage #{stage_display}")
+                self.haar_stage_info_var.set(
+                    f"sum={haar_result['stage_sum']:.6f}, threshold={haar_result['stage_threshold']:.6f}"
+                )
+                stage_sign = ">=" if haar_result["stage_passed"] else "<"
+                self.haar_stage_compare_var.set(
+                    f"Stage compare: {haar_result['stage_sum']:.6f} {stage_sign} {haar_result['stage_threshold']:.6f}"
+                )
+                self.haar_stage_pass_var.set(f"Stage passed: {haar_result['stage_passed']}")
+            else:
+                self.haar_stage_title_var.set("Stage: N/A")
+                self.haar_stage_info_var.set("sum=N/A, threshold=N/A")
+                self.haar_stage_compare_var.set("Stage compare: N/A")
+                self.haar_stage_pass_var.set("Stage passed: N/A")
+        else:
+            self.face_status_var.set("Face Status: disabled")
+            self.candidate_index_var.set("Candidate: disabled")
+            self.haar_feature_title_var.set("Feature: disabled")
+            self.haar_feature_index_var.set("Feature: disabled")
+            self.haar_feature_calc_var.set("Feature value: disabled")
+            self.haar_feature_xml_threshold_var.set("XML threshold: disabled")
+            self.haar_feature_threshold_calc_var.set("Normalized threshold calc: disabled")
+            self.haar_feature_compare_var.set("Compare: disabled")
+            self.haar_feature_leafs_var.set("Leaf values: disabled")
+            self.haar_feature_pass_var.set("Feature passed: disabled")
+            self.haar_feature_decision_var.set("Selected branch: disabled")
+            self.haar_stage_title_var.set("Stage: disabled")
+            self.haar_stage_info_var.set("Stage: disabled")
+            self.haar_stage_compare_var.set("Stage compare: disabled")
+            self.haar_stage_pass_var.set("Stage passed: disabled")
+            self.face_preview.config(image='')
 
         formatted = cv2.cvtColor(self.frame, cv2.COLOR_BGR2RGB)
         image = Image.fromarray(formatted)
@@ -618,123 +846,6 @@ class App:
         photo = ImageTk.PhotoImage(image)
         self.video_area.config(image=photo, compound="center")
         self.video_area.image = photo
-
-        self.target_var.set(f"Target Ref Color: {color_info['bgr_str']}")
-        if self.tracker.reference_color is not None:
-            blue, green, red = map(int, self.tracker.reference_color)
-            self.target_color_preview.config(bg=f"#{red:02x}{green:02x}{blue:02x}")
-        else:
-            self.target_color_preview.config(bg="#2b3140")
-        self.n_var.set(f"N (pixel count): {color_info['pixel_count']}")
-        self.sum_x_var.set(f"Sum X (sum x_i): {color_info['sum_x']}")
-        self.sum_y_var.set(f"Sum Y (sum y_i): {color_info['sum_y']}")
-        center = f"({color_info['center_x']}, {color_info['center_y']})" if color_info['center_x'] is not None else "None"
-        self.result_var.set(f"Result (Xc, Yc): {center}")
-        self.face_status_var.set(f"Face Status: {face_status}")
-        face_image = self.haar_inspector.render_feature_overlay(frame_for_haar, self.current_feature_index, face_region)
-        face_preview_bgr = cv2.cvtColor(np.array(face_image), cv2.COLOR_RGB2BGR)
-        frame_h, frame_w = face_preview_bgr.shape[:2]
-        _, _, preview_w, preview_h, _, _ = self._get_face_preview_geometry(frame_w, frame_h)
-        preview_scale = min(preview_w / max(frame_w, 1), preview_h / max(frame_h, 1))
-        preview_rect_thickness = max(2, int(round(2 / max(preview_scale, 1e-6))))
-        if len(faces) > 0:
-            fx, fy, fw, fh = map(int, faces[0])
-            cv2.rectangle(face_preview_bgr, (fx, fy), (fx + fw, fy + fh), (0, 255, 0), preview_rect_thickness)
-        if selected_candidate is not None:
-            cx, cy, cw, ch = selected_candidate
-            cv2.rectangle(face_preview_bgr, (cx, cy), (cx + cw, cy + ch), (255, 0, 0), preview_rect_thickness)
-        face_image = Image.fromarray(cv2.cvtColor(face_preview_bgr, cv2.COLOR_BGR2RGB))
-        face_image = self._fit_face_to_preview(face_image)
-        face_photo = ImageTk.PhotoImage(face_image)
-        self.face_preview.config(image=face_photo)
-        self.face_preview.image = face_photo
-
-        feature_count = self.haar_inspector.get_feature_count()
-        if feature_count > 0:
-            effective_index = self.current_feature_index % feature_count
-            self.current_feature_index = effective_index
-            current_feature = self.haar_inspector.get_feature(effective_index)
-            haar_result = self.haar_inspector.evaluate_feature(frame_for_haar, effective_index, face_region)
-            self.haar_feature_title_var.set(f"Feature #{effective_index + 1}")
-            self.haar_feature_index_var.set(f"Feature: {effective_index + 1} / {feature_count}")
-            self.haar_feature_info_var.set("")
-        else:
-            haar_result = {
-                "weighted_sum": 0.0,
-                "normalization": 1.0,
-                "variance_norm_factor": 1.0,
-                "effective_threshold": 0.0,
-                "response": 0.0,
-                "threshold": 0.0,
-                "passed": False,
-                "left_value": 0.0,
-                "right_value": 0.0,
-                "selected_branch": "N/A",
-                "selected_leaf_value": 0.0,
-                "stage_index": None,
-                "stage_sum": 0.0,
-                "stage_threshold": 0.0,
-                "stage_passed": False,
-                "matched": False,
-            }
-            self.haar_feature_title_var.set("Feature: N/A")
-            self.haar_feature_index_var.set("Feature: N/A")
-            self.haar_feature_info_var.set("")
-
-        self.haar_feature_response_var.set(
-            f"Response: {haar_result['response']:.6f}"
-        )
-        self.haar_feature_calc_var.set(
-            f"Response calc: {haar_result['weighted_sum']:.2f} / {haar_result['normalization']:.2f} = {haar_result['response']:.6f}\nVariance normalization factor: {haar_result['variance_norm_factor']:.6f}"
-        )
-        self.haar_feature_xml_threshold_var.set(
-            f"XML threshold: {haar_result['threshold']:.6f}"
-        )
-        self.haar_feature_threshold_calc_var.set(
-            f"Normalized threshold calc: {haar_result['threshold']:.6f} * {haar_result['variance_norm_factor']:.6f} = {haar_result['effective_threshold']:.6f}"
-        )
-        compare_sign = ">=" if haar_result["passed"] else "<"
-        self.haar_feature_compare_var.set(
-            f"Compare: {haar_result['response']:.6f} {compare_sign} {haar_result['effective_threshold']:.6f}"
-        )
-        self.haar_feature_leafs_var.set(
-            f"Leaf values: left={haar_result['left_value']:.6f} | right={haar_result['right_value']:.6f}"
-        )
-        self.haar_feature_pass_var.set(f"Feature passed: {haar_result['passed']}")
-        if haar_result.get("matched"):
-            decision = haar_result["selected_branch"]
-            leaf_value = haar_result["selected_leaf_value"]
-            self.haar_feature_decision_var.set(
-                f"Selected branch: {decision} | selected leaf value: {leaf_value:.6f}"
-            )
-        else:
-            self.haar_feature_decision_var.set("Selected branch: N/A")
-
-        if haar_result.get("stage_index") is not None:
-            stage_display = int(haar_result["stage_index"]) + 1
-            self.haar_stage_title_var.set(f"Stage #{stage_display}")
-            self.haar_stage_info_var.set(
-                f"sum={haar_result['stage_sum']:.6f}, threshold={haar_result['stage_threshold']:.6f}"
-            )
-            stage_sign = ">=" if haar_result["stage_passed"] else "<"
-            self.haar_stage_compare_var.set(
-                f"Stage compare: {haar_result['stage_sum']:.6f} {stage_sign} {haar_result['stage_threshold']:.6f}"
-            )
-            self.haar_stage_pass_var.set(f"Stage passed: {haar_result['stage_passed']}")
-        else:
-            self.haar_stage_title_var.set("Stage: N/A")
-            self.haar_stage_info_var.set("sum=N/A, threshold=N/A")
-            self.haar_stage_compare_var.set("Stage compare: N/A")
-            self.haar_stage_pass_var.set("Stage passed: N/A")
-
-        mask = color_info["binary_mask"]
-        if mask.size:
-            mask_image = self._fit_mask_to_preview(mask)
-            mask_photo = ImageTk.PhotoImage(mask_image)
-            self.mask_preview.config(image=mask_photo)
-            self.mask_preview.image = mask_photo
-        else:
-            self.mask_preview.config(image='')
 
         self.root.after(30, self._update_dashboard)
 
